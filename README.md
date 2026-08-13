@@ -1,42 +1,63 @@
 # SiriAI
 
-Stock Siri keeps working exactly as it does now. Alarms, timers, notes, messages — all
-untouched. Only the requests Siri cannot answer itself are sent to a language model, and
-the reply is shown on screen and spoken in Siri's own voice.
+A jailbreak tweak for iOS 18 that answers the questions Siri gives up on.
 
-Built for iOS 18.5, rootless, tested on an iPhone SE (2020).
+Siri continues to handle everything it already handles — alarms, timers, notes, messages,
+device settings. Only the requests it hands off to web search are sent to a language model.
+The reply is written back into Siri's own answer object, so it appears in the normal
+interface and is spoken in the normal voice.
 
-## What gets replaced
+## How it works
 
-Siri never refuses a question — it quietly falls back to web search. That fallback is the
-trigger, so the tweak reacts to what Siri actually did rather than to any phrase:
+Siri does not refuse a question it cannot answer; it silently falls back to a web search.
+That fallback is identified structurally, by the dialog identifier attached to the reply,
+rather than by matching any phrase — so the behaviour is the same in every language.
 
-| Case | Dialog identifier | Replaced |
+| Reply | Dialog identifier | Intercepted |
 | --- | --- | --- |
 | Web search fallback | `WEBINDEX#` | always |
-| Encyclopedia summary | `KG#` | optional, on by default |
-| Scripted small talk | `SocialConversation#` | optional, off by default |
+| Encyclopedia summary | `KG#` | optional, enabled by default |
+| Scripted small talk | `SocialConversation#` | optional, disabled by default |
 
-Everything else passes through untouched. When no answer arrives in time, Siri's own
-result is left in place.
+Anything else is passed through untouched. If no answer arrives within the timeout, Siri's
+own result is left exactly as it was.
 
-## Setup
+The request is issued from the injected library itself, on a detached thread, using a
+synchronous HTTP call. There is no helper daemon, no launch job and no listening socket;
+nothing remains resident once the Siri process exits.
 
-Install the deb, then open Settings → SiriAI and enter an API key. Any OpenAI-compatible
-endpoint works — the base URL, model and key are all configurable, so OpenRouter, Groq,
-Cerebras or a local server are one code path.
+## Installation
+
+Add `https://tr3tol.github.io/repo/` in Sileo, or install the `.deb` directly.
+
+Requires a rootless jailbreak on iOS 18 and `preferenceloader`.
+
+## Configuration
+
+All settings live in **Settings → SiriAI** and take effect immediately.
+
+An API key is the only required field. Any OpenAI-compatible endpoint works, including
+OpenRouter, Groq, Cerebras and locally hosted servers.
+
+| Setting | Purpose |
+| --- | --- |
+| Model, Backup model, Last resort | Tried in order; a rate-limited model falls through to the next |
+| Custom prompt | Replaces the built-in prompt entirely |
+| Language | Selects the built-in prompt when no custom one is set |
+| Length, Timeout | Bound generation time and how long a reply is awaited |
+| Article summaries, Scripted replies | Widen what is intercepted |
+| Hide search card | Removes the search result beside the answer |
+| Ask early | Starts the request when the question is recognised, in parallel with Siri's own round trip, at the cost of one request per command |
+| Topic trigger | A comma-separated word list with a prompt of its own |
 
 ## Building
 
-Theos, on device or with a matching toolchain:
+Requires [Theos](https://theos.dev) with an iOS SDK.
 
-```
+```sh
 make package THEOS_PACKAGE_SCHEME=rootless FINALPACKAGE=1
 ```
 
-## Notes
+## License
 
-Networking lives in the injected dylib itself rather than a helper daemon: nothing runs
-in the background, and the request thread dies with the short-lived Siri process. The
-request starts as soon as the question is recognised — in parallel with Siri's own round
-trip — so the reply is usually ready by the time it is needed.
+GPL-3.0

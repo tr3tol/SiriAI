@@ -8,3 +8,7 @@ Author: tr3tol <https://github.com/tr3tol>
 Section: Tweaks
 Depends: firmware (>= 18.0), firmware (<< 19.0), mobilesubstrate, preferenceloader
 Tag: purpose::extension, compatible_min::ios18.0, compatible_max::ios18.9
+Homepage: https://github.com/tr3tol/SiriAI
+Depiction: https://tr3tol.github.io/repo/depictions/siriai.html
+SileoDepiction: https://tr3tol.github.io/repo/depictions/siriai.json
+Icon: https://tr3tol.github.io/repo/assets/icon.png
