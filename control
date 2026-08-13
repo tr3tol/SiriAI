@@ -1,0 +1,10 @@
+Package: com.tr3tol.siriai
+Name: SiriAI
+Version: 1.0.0
+Architecture: iphoneos-arm64
+Description: Answers the questions Siri hands off to web search
+Maintainer: tr3tol <https://github.com/tr3tol>
+Author: tr3tol <https://github.com/tr3tol>
+Section: Tweaks
+Depends: firmware (>= 18.0), firmware (<< 19.0), mobilesubstrate, preferenceloader
+Tag: purpose::extension, compatible_min::ios18.0, compatible_max::ios18.9
