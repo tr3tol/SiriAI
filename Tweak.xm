@@ -181,6 +181,8 @@ static BOOL sa_is_search_card(id ace) {
 		return;
 	}
 
+	sa_prefs_sync();
+
 	// A new question invalidates the previous answer still sitting in the buffer.
 	pthread_mutex_lock(&g_lock);
 	sa_copy_utf8(g_question, utf8, sizeof(g_question));

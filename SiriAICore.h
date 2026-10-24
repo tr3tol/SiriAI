@@ -48,6 +48,14 @@ static void sa_copy_utf8(char *dst, const char *src, size_t size) {
 	dst[n] = '\0';
 }
 
+// A long-lived process keeps its own copy of another app's domain and does not see edits
+// made in Settings until told to reload it.
+static void sa_prefs_sync(void) {
+	CFStringRef d = CFStringCreateWithCString(kCFAllocatorDefault, kPrefDomain, kCFStringEncodingUTF8);
+	CFPreferencesAppSynchronize(d);
+	CFRelease(d);
+}
+
 // cfprefsd is unreachable from the Siri sandbox, so the plist is read directly.
 static id sa_pref_obj(const char *key) {
 	CFStringRef k = CFStringCreateWithCString(kCFAllocatorDefault, key, kCFStringEncodingUTF8);
