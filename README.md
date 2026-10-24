@@ -43,8 +43,10 @@ OpenRouter, set the model yourself: the defaults are OpenRouter ids and are skip
 For DeepSeek, use base URL `https://api.deepseek.com` and model `deepseek-flash`. Thinking
 mode is switched off automatically, since it spends the whole length budget before answering.
 
-Failed requests are logged with the provider's error message; filter the device log for
-`[SiriAI]`.
+**Test connection** sends a short question to every model in the chain and shows each reply,
+how long it took, or the provider's exact error. **Speak errors** makes Siri say why a request
+failed instead of falling back to its own result. Failures are also logged; filter the device
+log for `[SiriAI]`.
 
 | Setting | Purpose |
 | --- | --- |
@@ -59,7 +61,9 @@ Failed requests are logged with the provider's error message; filter the device 
 
 ## Building
 
-Requires [Theos](https://theos.dev) with an iOS SDK.
+Requires [Theos](https://theos.dev) with an iOS SDK. On Linux the arm64e slice is built with
+the old ABI, so the code avoids blocks, `@""` literals and compile-time classes; see
+`SiriAICore.h`.
 
 ```sh
 make package THEOS_PACKAGE_SCHEME=rootless FINALPACKAGE=1

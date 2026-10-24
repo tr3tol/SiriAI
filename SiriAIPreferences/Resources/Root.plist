@@ -132,6 +132,35 @@
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
+			<key>footerText</key>
+			<string>Sends a short question to each model above and shows the reply or the exact error. Speak errors makes Siri say why a request failed instead of falling back to its own result.</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSButtonCell</string>
+			<key>label</key>
+			<string>Test connection</string>
+			<key>action</key>
+			<string>sa_testConnection:</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>label</key>
+			<string>Speak errors</string>
+			<key>key</key>
+			<string>debug</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.tr3tol.siriai</string>
+			<key>PostNotification</key>
+			<string>com.tr3tol.siriai/preferenceschanged</string>
+		</dict>
+
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
 			<key>label</key>
 			<string>Answers</string>
 			<key>footerText</key>

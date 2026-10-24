@@ -77,6 +77,20 @@ static id SARootSpecifiers(id self, SEL _cmd) {
 	return specifiers;
 }
 
+// TestConnection.m
+void SATestConnection(id controller);
+void SAShowTestResult(id controller, id report);
+
+// Action of the Test connection button.
+static void SATestAction(id self, SEL _cmd, id specifier) {
+	SATestConnection(self);
+}
+
+// Called back on the main thread once the test has run.
+static void SAShowResult(id self, SEL _cmd, id report) {
+	SAShowTestResult(self, report);
+}
+
 // Built through the runtime rather than @interface: this toolchain corrupts compile-time
 // class metadata in the arm64e slice.
 __attribute__((constructor))
@@ -90,6 +104,8 @@ static void SARegisterControllers(void) {
 	if (!page) return;
 
 	class_addMethod(page, sel_getUid("specifiers"), (IMP)SARootSpecifiers, "@@:");
+	class_addMethod(page, sel_getUid("sa_testConnection:"), (IMP)SATestAction, "v@:@");
+	class_addMethod(page, sel_getUid("sa_showTestResult:"), (IMP)SAShowResult, "v@:@");
 	objc_registerClassPair(page);
 
 	SAFixReturnKey();
