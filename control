@@ -1,6 +1,6 @@
 Package: com.tr3tol.siriai
 Name: SiriAI
-Version: 1.1.2
+Version: 1.1.3
 Architecture: iphoneos-arm64
 Description: Answers the questions Siri hands off to web search
 Maintainer: tr3tol <https://github.com/tr3tol>

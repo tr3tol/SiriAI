@@ -43,6 +43,57 @@ static BOOL safe_set(id obj, const char *selName, id value) {
 #define SA_FAILED  3
 
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
+
+// Diagnostics, guarded by g_lock. The tokens stay registered for the life of the process,
+// since notifyd drops a name's state once nobody holds it.
+static uint64_t g_status;
+static int  g_status_token = -1;
+static int  g_ident_tokens[kStatusIdents * 2];
+static char g_idents[kStatusIdents][17];
+
+static void sa_status_publish_locked(void) {
+	if (g_status_token == -1) return;
+	uint64_t now = (uint64_t)(uint32_t)time(NULL);
+	notify_set_state(g_status_token, (g_status & 0xFFFFFFFFULL) | (now << 32));
+}
+
+static void sa_status_locked(uint64_t bits) {
+	g_status |= bits;
+	sa_status_publish_locked();
+}
+
+static void sa_status(uint64_t bits) {
+	pthread_mutex_lock(&g_lock);
+	sa_status_locked(bits);
+	pthread_mutex_unlock(&g_lock);
+}
+
+// A new question starts a fresh record; what the process itself is like stays.
+static void sa_status_reset_locked(void) {
+	g_status &= (SA_ST_LOADED | SA_ST_CONV_CLASS | SA_ST_VIEW_CLASS);
+	memset(g_idents, 0, sizeof(g_idents));
+	for (int i = 0; i < kStatusIdents * 2; i++)
+		if (g_ident_tokens[i] != -1) notify_set_state(g_ident_tokens[i], 0);
+	sa_status_publish_locked();
+}
+
+// Keeps the first distinct identifiers of the current reply, 16 characters each.
+static void sa_note_ident(const char *ident) {
+	pthread_mutex_lock(&g_lock);
+	for (int i = 0; i < kStatusIdents; i++) {
+		if (g_idents[i][0] && strncmp(g_idents[i], ident, 16) == 0) break;
+		if (g_idents[i][0]) continue;
+		strlcpy(g_idents[i], ident, sizeof(g_idents[i]));
+		char padded[17] = {0};
+		strncpy(padded, g_idents[i], 16);
+		if (g_ident_tokens[2 * i] != -1)
+			notify_set_state(g_ident_tokens[2 * i], sa_pack8(padded));
+		if (g_ident_tokens[2 * i + 1] != -1)
+			notify_set_state(g_ident_tokens[2 * i + 1], sa_pack8(padded + 8));
+		break;
+	}
+	pthread_mutex_unlock(&g_lock);
+}
 static pthread_cond_t  g_cond = PTHREAD_COND_INITIALIZER;
 static int      g_state = SA_IDLE;
 static unsigned g_generation = 0;
@@ -66,9 +117,11 @@ static void *sa_worker(void *arg) {
 			if (answer) {
 				sa_copy_utf8(g_answer, answer, sizeof(g_answer));
 				g_state = SA_DONE;
+				sa_status_locked(SA_ST_ANSWERED);
 			} else {
 				sa_copy_utf8(g_error, err, sizeof(g_error));
 				g_state = SA_FAILED;
+				sa_status_locked(SA_ST_FAILED);
 			}
 			pthread_cond_broadcast(&g_cond);
 		}
@@ -89,6 +142,7 @@ static void sa_start(const char *question) {
 	g_state = SA_RUNNING;
 	g_answer[0] = '\0';
 	g_error[0] = '\0';
+	sa_status_locked(SA_ST_STARTED);
 	pthread_mutex_unlock(&g_lock);
 
 	sa_copy_utf8(job->question, question, sizeof(job->question));
@@ -131,6 +185,7 @@ static BOOL sa_collect(char *out, size_t outlen, double seconds) {
 		g_generation++;
 		g_state = SA_FAILED;
 		snprintf(g_error, sizeof(g_error), "no answer within %d seconds", limit);
+		sa_status_locked(SA_ST_TIMEOUT);
 	}
 	BOOL ok = (g_state == SA_DONE && g_answer[0] != '\0');
 	if (ok) sa_copy_utf8(out, g_answer, outlen);
@@ -190,6 +245,8 @@ static BOOL sa_is_search_card(id ace) {
 	g_state = SA_IDLE;
 	g_answer[0] = '\0';
 	g_error[0] = '\0';
+	sa_status_reset_locked();
+	sa_status_locked(SA_ST_QUESTION);
 	pthread_mutex_unlock(&g_lock);
 
 	if (sa_pref_bool("enabled", YES) && sa_pref_bool("prefetch", NO))
@@ -203,19 +260,39 @@ static BOOL sa_is_search_card(id ace) {
 %hook SiriSharedUICompactViewModelController
 
 - (void)_processInsertedConversationItems:(id)items forConversation:(id)conversation {
-	if (![items respondsToSelector:sel_getUid("count")] || !sa_pref_bool("enabled", YES)) {
+	if (![items respondsToSelector:sel_getUid("count")]) {
+		%orig;
+		return;
+	}
+	sa_status(SA_ST_ITEMS);
+	if (!sa_pref_bool("enabled", YES)) {
+		sa_status(SA_ST_DISABLED);
 		%orig;
 		return;
 	}
 
 	BOOL intercept = NO;
 	for (id item in (NSArray *)items) {
-		if (sa_should_intercept(sa_ace(item))) { intercept = YES; break; }
+		id ace = sa_ace(item);
+		if (!ace) continue;
+		sa_status(SA_ST_ACE);
+
+		id ident = safe_get(ace, "dialogIdentifier");
+		const char *s = ident ? [[ident description] UTF8String] : NULL;
+		if (s && s[0]) {
+			sa_status(SA_ST_IDENT);
+			sa_note_ident(s);
+		}
+		os_log(OS_LOG_DEFAULT, "[SiriAI] item %{public}s %{public}s",
+			object_getClassName(ace), s ? s : "-");
+
+		if (sa_should_intercept(ace)) intercept = YES;
 	}
 	if (!intercept) {
 		%orig;
 		return;
 	}
+	sa_status(SA_ST_MATCH);
 
 	// Called repeatedly as items stream in. Only the first call starts a request.
 	if (!sa_pref_bool("prefetch", NO)) {
@@ -259,7 +336,34 @@ static BOOL sa_is_search_card(id ace) {
 		[kept addObject:item];
 	}
 
+	sa_status(SA_ST_REPLACED);
 	%orig(kept, conversation);
 }
 
 %end
+
+%ctor {
+	%init;
+
+	pthread_mutex_lock(&g_lock);
+	for (int i = 0; i < kStatusIdents * 2; i++) {
+		char name[96];
+		snprintf(name, sizeof(name), "%s%d", kStatusIdent, i);
+		if (notify_register_check(name, &g_ident_tokens[i]) != NOTIFY_STATUS_OK)
+			g_ident_tokens[i] = -1;
+	}
+	if (notify_register_check(kStatusName, &g_status_token) != NOTIFY_STATUS_OK)
+		g_status_token = -1;
+
+	static int proc_token = -1;
+	if (notify_register_check(kStatusProc, &proc_token) == NOTIFY_STATUS_OK)
+		notify_set_state(proc_token, sa_pack8(getprogname()));
+
+	g_status = SA_ST_LOADED;
+	if (objc_getClass("AFConversation")) g_status |= SA_ST_CONV_CLASS;
+	if (objc_getClass("SiriSharedUICompactViewModelController")) g_status |= SA_ST_VIEW_CLASS;
+	sa_status_publish_locked();
+	pthread_mutex_unlock(&g_lock);
+
+	os_log(OS_LOG_DEFAULT, "[SiriAI] loaded into %{public}s", getprogname());
+}

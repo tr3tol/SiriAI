@@ -9,10 +9,44 @@
 #import <stdlib.h>
 #import <string.h>
 #import <os/log.h>
+#import <notify.h>
 
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 // Each includer uses only part of this file.
 #pragma clang diagnostic ignored "-Wunused-function"
+
+// What the tweak saw in Siri, published as notify state so the settings pane can show it
+// without logs. The status word holds flags in the low half and a timestamp in the high.
+#define kStatusName "com.tr3tol.siriai.status"
+#define kStatusProc "com.tr3tol.siriai.status.proc"
+#define kStatusIdent "com.tr3tol.siriai.status.id"   // + 0..7, two words per identifier
+#define kStatusIdents 4
+
+#define SA_ST_LOADED       (1ULL << 0)
+#define SA_ST_CONV_CLASS   (1ULL << 1)
+#define SA_ST_VIEW_CLASS   (1ULL << 2)
+#define SA_ST_QUESTION     (1ULL << 3)
+#define SA_ST_ITEMS        (1ULL << 4)
+#define SA_ST_ACE          (1ULL << 5)
+#define SA_ST_IDENT        (1ULL << 6)
+#define SA_ST_MATCH        (1ULL << 7)
+#define SA_ST_STARTED      (1ULL << 8)
+#define SA_ST_ANSWERED     (1ULL << 9)
+#define SA_ST_FAILED       (1ULL << 10)
+#define SA_ST_TIMEOUT      (1ULL << 11)
+#define SA_ST_REPLACED     (1ULL << 12)
+#define SA_ST_DISABLED     (1ULL << 13)
+
+static uint64_t sa_pack8(const char *s) {
+	uint64_t v = 0;
+	for (int i = 0; i < 8 && s[i]; i++) v |= (uint64_t)(unsigned char)s[i] << (8 * i);
+	return v;
+}
+
+static void sa_unpack8(uint64_t v, char *out) {
+	for (int i = 0; i < 8; i++) out[i] = (char)((v >> (8 * i)) & 0xFF);
+	out[8] = '\0';
+}
 
 #define kPrefDomain "com.tr3tol.siriai"
 
