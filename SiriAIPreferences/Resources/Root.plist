@@ -32,7 +32,7 @@
 			<key>label</key>
 			<string>Backend</string>
 			<key>footerText</key>
-			<string>Models are tried in order when one is rate-limited. openrouter/free routes across every free model, which makes it a good last resort but a slow first choice.</string>
+			<string>Models are tried in order when one is rate-limited; clear a backup field to skip it. The default models are OpenRouter ids and only apply with an OpenRouter base URL. openrouter/free routes across every free model, which makes it a good last resort but a slow first choice.</string>
 		</dict>
 		<dict>
 			<key>cell</key>

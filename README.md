@@ -37,11 +37,18 @@ Requires a rootless jailbreak on iOS 18 and `preferenceloader`.
 All settings live in **Settings → SiriAI** and take effect immediately.
 
 An API key is the only required field. Any OpenAI-compatible endpoint works, including
-OpenRouter, Groq, Cerebras and locally hosted servers.
+OpenRouter, DeepSeek, Groq, Cerebras and locally hosted servers. With any provider other than
+OpenRouter, set the model yourself: the defaults are OpenRouter ids and are skipped elsewhere.
+
+For DeepSeek, use base URL `https://api.deepseek.com` and model `deepseek-flash`. Thinking
+mode is switched off automatically, since it spends the whole length budget before answering.
+
+Failed requests are logged with the provider's error message; filter the device log for
+`[SiriAI]`.
 
 | Setting | Purpose |
 | --- | --- |
-| Model, Backup model, Last resort | Tried in order; a rate-limited model falls through to the next |
+| Model, Backup model, Last resort | Tried in order; a rate-limited model falls through to the next. Clear a backup to skip it |
 | Custom prompt | Replaces the built-in prompt entirely |
 | Language | Selects the built-in prompt when no custom one is set |
 | Length, Timeout | Bound generation time and how long a reply is awaited |

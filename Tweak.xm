@@ -4,6 +4,7 @@
 #import <string.h>
 #import <pthread.h>
 #import <sys/time.h>
+#import <os/log.h>
 
 #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
@@ -82,9 +83,17 @@ static id sa_pref_obj(const char *key) {
 	return nil;
 }
 
+// A pasted key or model id often carries a trailing space or newline, which the server
+// rejects as a different key or an unknown model.
+static NSString *sa_trim(id v) {
+	if (![v isKindOfClass:[NSString class]]) return nil;
+	return [(NSString *)v stringByTrimmingCharactersInSet:
+		[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+}
+
 static NSString *sa_pref_str(const char *key, const char *fallback) {
-	id v = sa_pref_obj(key);
-	if ([v isKindOfClass:[NSString class]] && [(NSString *)v length] > 0) return v;
+	NSString *v = sa_trim(sa_pref_obj(key));
+	if ([v length] > 0) return v;
 	return sa_str(fallback);
 }
 
@@ -176,19 +185,60 @@ static NSString *sa_prompt_for(const char *question) {
 	return sa_str(canned);
 }
 
-// fatal: a missing or rejected key, which no other model survives either.
-static char *sa_ask_model(const char *question, NSString *model, double budget, BOOL *fatal) {
-	*fatal = NO;
-
-	NSString *key = sa_pref_str("apiKey", "");
-	if ([key length] == 0) {
-		*fatal = YES;
-		return NULL;
-	}
-
+// Accepts the root, the /v1 root or the full endpoint as pasted from provider docs.
+static NSString *sa_base_url(void) {
 	NSString *base = sa_pref_str("baseURL", kDefaultBaseURL);
 	while ([base hasSuffix:sa_str("/")])
 		base = [base substringToIndex:[base length] - 1];
+	if ([base hasSuffix:sa_str("/chat/completions")])
+		base = [base substringToIndex:[base length] - strlen("/chat/completions")];
+	return base;
+}
+
+static BOOL sa_host_is(NSString *base, const char *domain) {
+	NSString *host = [[NSURL URLWithString:base] host];
+	if (!host) return NO;
+	return [host rangeOfString:sa_str(domain)
+		options:NSCaseInsensitiveSearch].location != NSNotFound;
+}
+
+// The default model ids and the reasoning parameter are OpenRouter's own. Elsewhere the ids
+// do not exist, and strict servers may reject the request outright over the unknown field.
+static BOOL sa_is_openrouter(NSString *base) {
+	return sa_host_is(base, "openrouter.ai");
+}
+
+// An untouched field falls back to the OpenRouter default, on OpenRouter only. A backup
+// field cleared on purpose stays off.
+static NSString *sa_pref_model(const char *key, const char *fallback, BOOL primary,
+                               BOOL openrouter) {
+	NSString *v = sa_trim(sa_pref_obj(key));
+	if ([v length] > 0) return v;
+	if (v && !primary) return nil;
+	return openrouter ? sa_str(fallback) : nil;
+}
+
+static void sa_log_failure(NSString *model, long status, NSData *data, NSError *error) {
+	const char *m = [model UTF8String];
+	if (error) {
+		os_log(OS_LOG_DEFAULT, "[SiriAI] %{public}s: %{public}s", m ? m : "?",
+			[[error localizedDescription] UTF8String] ?: "request failed");
+		return;
+	}
+	// The error body names the cause: bad key, no balance, unknown model, bad parameter.
+	char body[384] = "";
+	if (data) {
+		size_t n = [data length] < sizeof(body) - 1 ? [data length] : sizeof(body) - 1;
+		memcpy(body, [data bytes], n);
+		body[n] = '\0';
+	}
+	os_log(OS_LOG_DEFAULT, "[SiriAI] %{public}s: HTTP %ld %{public}s", m ? m : "?", status, body);
+}
+
+// fatal: a rejected key or an empty account, which no other model survives either.
+static char *sa_ask_model(const char *question, NSString *key, NSString *base, BOOL openrouter,
+                          NSString *model, double budget, BOOL *fatal) {
+	*fatal = NO;
 
 	NSURL *url = [NSURL URLWithString:[base stringByAppendingString:sa_str("/chat/completions")]];
 	if (!url) return NULL;
@@ -205,16 +255,27 @@ static char *sa_ask_model(const char *question, NSString *model, double budget, 
 	[messages addObject:sys];
 	[messages addObject:usr];
 
-	// Otherwise reasoning ends up in content and gets spoken.
-	NSMutableDictionary *reasoning = [NSMutableDictionary dictionary];
-	[reasoning setObject:[NSNumber numberWithBool:YES] forKey:sa_str("exclude")];
-
 	NSMutableDictionary *body = [NSMutableDictionary dictionary];
 	[body setObject:model forKey:sa_str("model")];
 	[body setObject:messages forKey:sa_str("messages")];
-	[body setObject:reasoning forKey:sa_str("reasoning")];
 	[body setObject:[NSNumber numberWithInt:(int)sa_pref_num("maxTokens", 160)]
 		forKey:sa_str("max_tokens")];
+
+	// Otherwise reasoning ends up in content and gets spoken. Other providers either return
+	// it in a separate field or inline it before </think>, which is stripped below.
+	if (openrouter) {
+		NSMutableDictionary *reasoning = [NSMutableDictionary dictionary];
+		[reasoning setObject:[NSNumber numberWithBool:YES] forKey:sa_str("exclude")];
+		[body setObject:reasoning forKey:sa_str("reasoning")];
+	}
+
+	// DeepSeek thinks by default: the reasoning uses up max_tokens, leaves content empty and
+	// takes longer than the timeout.
+	if (sa_host_is(base, "deepseek.com")) {
+		NSMutableDictionary *thinking = [NSMutableDictionary dictionary];
+		[thinking setObject:sa_str("disabled") forKey:sa_str("type")];
+		[body setObject:thinking forKey:sa_str("thinking")];
+	}
 
 	NSData *payload = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
 	if (!payload) return NULL;
@@ -229,15 +290,21 @@ static char *sa_ask_model(const char *question, NSString *model, double budget, 
 
 	// Synchronous: no completion block, so no helper process is needed.
 	NSURLResponse *response = nil;
+	NSError *error = nil;
 	NSData *data = [NSURLConnection sendSynchronousRequest:req
-		returningResponse:&response error:nil];
-	if (!data) return NULL;
+		returningResponse:&response error:&error];
+	if (!data) {
+		sa_log_failure(model, 0, nil, error);
+		return NULL;
+	}
 
 	long status = [response respondsToSelector:sel_getUid("statusCode")]
 		? (long)[(NSHTTPURLResponse *)response statusCode] : 0;
 	if (status != 200) {
-		// 401/403 is the key itself. 404 is only this model id, so keep going.
-		*fatal = (status == 401 || status == 403);
+		sa_log_failure(model, status, data, nil);
+		// 401/403 is the key itself, 402 an empty balance. 404 is only this model id, so
+		// keep going.
+		*fatal = (status == 401 || status == 402 || status == 403);
 		return NULL;
 	}
 
@@ -251,7 +318,11 @@ static char *sa_ask_model(const char *question, NSString *model, double budget, 
 	if (![message isKindOfClass:[NSDictionary class]]) return NULL;
 
 	id content = [message objectForKey:sa_str("content")];
-	if (![content isKindOfClass:[NSString class]] || [(NSString *)content length] == 0) return NULL;
+	if (![content isKindOfClass:[NSString class]] || [(NSString *)content length] == 0) {
+		// Usually a reasoning model that spent max_tokens before it got to the answer.
+		sa_log_failure(model, status, data, nil);
+		return NULL;
+	}
 
 	const char *utf8 = [(NSString *)content UTF8String];
 	if (!utf8) return NULL;
@@ -265,25 +336,44 @@ static char *sa_ask_model(const char *question, NSString *model, double budget, 
 }
 
 static char *sa_ask(const char *question) {
+	NSString *key = sa_pref_str("apiKey", "");
+	if ([key length] == 0) {
+		os_log(OS_LOG_DEFAULT, "[SiriAI] no API key set");
+		return NULL;
+	}
+
+	NSString *base = sa_base_url();
+	BOOL openrouter = sa_is_openrouter(base);
+
 	NSMutableArray *chain = [NSMutableArray array];
 	const char *keys[]     = { "model",        "backupModel",   "lastModel"  };
 	const char *fallbacks[] = { kDefaultModel, kDefaultBackup,  kDefaultLast };
 
 	for (int i = 0; i < 3; i++) {
-		NSString *model = sa_pref_str(keys[i], fallbacks[i]);
+		NSString *model = sa_pref_model(keys[i], fallbacks[i], i == 0, openrouter);
 		if ([model length] > 0 && ![chain containsObject:model])
 			[chain addObject:model];
 	}
-	if ([chain count] == 0) return NULL;
+	if ([chain count] == 0) {
+		os_log(OS_LOG_DEFAULT, "[SiriAI] no model set for this base URL");
+		return NULL;
+	}
 
-	// Split so the chain fits the window the main thread waits. The floor keeps a short
-	// timeout from giving each model less time than any of them needs.
-	double budget = sa_timeout() / (double)[chain count];
-	if (budget < 2.5) budget = 2.5;
+	// Each model gets an even share of what is left, so the chain fits the window the main
+	// thread waits and time freed by a fast failure goes to the models after it. The floor
+	// keeps a short timeout from giving a model less time than any of them needs.
+	double deadline = CFAbsoluteTimeGetCurrent() + sa_timeout();
+	NSUInteger count = [chain count];
 
-	for (NSString *model in chain) {
+	for (NSUInteger i = 0; i < count; i++) {
+		double left = deadline - CFAbsoluteTimeGetCurrent();
+		if (left < 1.0) break;
+		double budget = left / (double)(count - i);
+		if (budget < 2.5) budget = left < 2.5 ? left : 2.5;
+
 		BOOL fatal = NO;
-		char *answer = sa_ask_model(question, model, budget, &fatal);
+		char *answer = sa_ask_model(question, key, base, openrouter,
+			[chain objectAtIndex:i], budget, &fatal);
 		if (answer) return answer;
 		if (fatal) return NULL;
 	}
@@ -358,13 +448,22 @@ static BOOL sa_collect(char *out, size_t outlen, double seconds) {
 	struct timeval now;
 	gettimeofday(&now, NULL);
 
+	long whole = (long)seconds;
+	long nsec = now.tv_usec * 1000 + (long)((seconds - (double)whole) * 1e9);
+
 	struct timespec deadline;
-	deadline.tv_sec = now.tv_sec + (long)seconds;
-	deadline.tv_nsec = now.tv_usec * 1000;
+	deadline.tv_sec = now.tv_sec + whole + nsec / 1000000000;
+	deadline.tv_nsec = nsec % 1000000000;
 
 	pthread_mutex_lock(&g_lock);
 	while (g_state == SA_RUNNING) {
 		if (pthread_cond_timedwait(&g_cond, &g_lock, &deadline) != 0) break;
+	}
+	// Given up on. Later calls for the same reply would otherwise each hold the main thread
+	// for the full timeout again, and a late answer would replace one already spoken.
+	if (g_state == SA_RUNNING) {
+		g_generation++;
+		g_state = SA_FAILED;
 	}
 	BOOL ok = (g_state == SA_DONE && g_answer[0] != '\0');
 	if (ok) strlcpy(out, g_answer, outlen);
