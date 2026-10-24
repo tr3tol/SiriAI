@@ -1,8 +1,8 @@
 // Preferences and the model request, shared by the tweak and the settings pane so the
 // connection test there exercises exactly what Siri runs.
 //
-// No @"" literals, ObjC collection literals, blocks or @interface: the arm64e slice built
-// by this toolchain uses the old ABI, which only plain C calls and message sends survive.
+// No @"" literals, ObjC collection literals, blocks or @interface, like the rest of the
+// project: plain C calls and message sends behave the same under either arm64e ABI.
 
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>

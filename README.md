@@ -61,9 +61,19 @@ log for `[SiriAI]`.
 
 ## Building
 
-Requires [Theos](https://theos.dev) with an iOS SDK. On Linux the arm64e slice is built with
-the old ABI, so the code avoids blocks, `@""` literals and compile-time classes; see
-`SiriAICore.h`.
+Requires [Theos](https://theos.dev) with an iOS SDK.
+
+The arm64e slice must use the current ABI, or Siri on iOS 18 never loads the tweak while
+the settings pane still works. Xcode produces it. On Linux, Theos's bundled clang only emits
+the pre-iOS 14 ABI, so compile with upstream clang 21 or newer and keep Theos's `ld64`:
+replace `$THEOS/toolchain/linux/iphone/bin/clang` (and `clang++`) with
+
+```sh
+#!/bin/sh
+exec /usr/bin/clang-21 -B"$THEOS/toolchain/linux/iphone/bin" "$@"
+```
+
+Check the result: `lipo -detailed_info` must report `PTR_AUTH_VERSION USERSPACE 0` for arm64e.
 
 ```sh
 make package THEOS_PACKAGE_SCHEME=rootless FINALPACKAGE=1
